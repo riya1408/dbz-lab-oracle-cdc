@@ -124,3 +124,14 @@ All 10,000 events written in every round, 0 rejected by the version guard.
 - Single laptop (Docker on WSL2) and a shared free Atlas cluster, so absolute numbers are specific to this setup.
 - Checked clock skew between the Oracle container and the host: under 200 ms. Oracle commit time has 1-second precision, so Oracle->Kafka is approximate (+/- 1s).
 - Load-test consumer does not commit offsets; it is a measurement tool, not the production consumer (`consumer_v1.py`).
+
+### Round 4: parallel writers
+`consumer_parallel.py`: same as round 3 (batch 2000), but each batch is split into 4 groups by customer ID and written by 4 threads at the same time. The same customer always goes to the same group, so per-customer order is kept.
+
+| Round | Batch size | Writers | Throughput | End-to-end p50 / p95 | Kafka->MongoDB p50 / p95 | Avg batch write |
+|---|---|---|---|---|---|---|
+| 3 | 2000 | 1 | 308 ev/s | 22.0s / 35.9s | 18.1s / 31.4s | 6.41s |
+| 4 | 2000 | 4 | 430 ev/s | 16.8s / 24.7s | 14.8s / 22.3s | 4.54s |
+
+All 10,000 written, 0 rejected. 4 writers gave about 1.4x, not 4x: the writers share the same free-tier Atlas cluster and the same internet connection, so the bottleneck moved from the consumer code to the database. Next lever would be a larger cluster or running the consumer in the same cloud region as the database, not more threads.
+Note: Oracle->Kafka varied between runs (about 2s to 4s) with no Debezium changes, so it is not compared across rounds.
