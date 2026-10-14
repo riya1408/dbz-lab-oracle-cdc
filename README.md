@@ -98,3 +98,29 @@ This is done as a single atomic MongoDB update filter (not read-then-write), so 
 
 \- Reconciliation checks (row counts) between Oracle and MongoDB.
 
+
+## Load test (Oct 2026)
+
+Script: `consumer_load.py`. Each round inserts 10,000 rows into Oracle (commit every 1,000) and measures how long each change takes to reach MongoDB.
+
+Latency is split into stages using three timestamps on every event:
+Oracle commit time, Kafka message time, and the time the MongoDB write finished.
+
+| Round | Batch size | Throughput | End-to-end p50 / p95 | Oracle->Kafka p50 / p95 | Kafka->MongoDB p50 / p95 | Avg bulk_write |
+|---|---|---|---|---|---|---|
+| 1 | 500 | 210 ev/s | 28.0s / 51.8s | not split | not split | - |
+| 2 | 500 | 237 ev/s | 27.2s / 45.2s | 3.8s / 4.4s | 23.6s / 40.8s | 2.09s (20 batches) |
+| 3 | 2000 | 308 ev/s | 22.0s / 35.9s | 3.9s / 4.6s | 18.1s / 31.4s | 6.41s (5 batches) |
+
+All 10,000 events written in every round, 0 rejected by the version guard.
+
+### What I learned
+- **Latency grew steadily during each run**, which means a backlog: events arrived faster than the consumer could write them. Kafka held them safely until the consumer caught up.
+- **The consumer is the bottleneck, not Debezium.** Debezium added about 4s; the rest was waiting to be written to MongoDB Atlas (free M0 tier, over the internet).
+- **Bigger batches helped, but less each time.** Modelling batch time as a fixed round-trip cost plus a per-document cost gives roughly 0.65s per round trip + 2.9 ms per document. At batch size 2000 the per-document cost dominates, so a single writer tops out around 345 ev/s.
+- **Next step:** parallel writers, with the batch split by customer ID so the same customer is always written by the same writer (keeps per-customer order).
+
+### Caveats
+- Single laptop (Docker on WSL2) and a shared free Atlas cluster, so absolute numbers are specific to this setup.
+- Checked clock skew between the Oracle container and the host: under 200 ms. Oracle commit time has 1-second precision, so Oracle->Kafka is approximate (+/- 1s).
+- Load-test consumer does not commit offsets; it is a measurement tool, not the production consumer (`consumer_v1.py`).
