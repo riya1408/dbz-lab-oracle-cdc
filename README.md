@@ -135,3 +135,14 @@ All 10,000 events written in every round, 0 rejected by the version guard.
 
 All 10,000 written, 0 rejected. 4 writers gave about 1.4x, not 4x: the writers share the same free-tier Atlas cluster and the same internet connection, so the bottleneck moved from the consumer code to the database. Next lever would be a larger cluster or running the consumer in the same cloud region as the database, not more threads.
 Note: Oracle->Kafka varied between runs (about 2s to 4s) with no Debezium changes, so it is not compared across rounds.
+
+## Consumer v2: deletes, tombstones and safe commits
+`consumer_v2.py` is the main consumer, now complete:
+- **Deletes** are soft deletes: the document is kept with `_deleted: true` and its SCN, so a replayed older insert or update is rejected instead of bringing the customer back.
+- **Tombstones** (the empty message Debezium sends after a delete) are skipped instead of crashing the consumer.
+- **Offsets are committed only after the MongoDB write succeeds.** A crash between write and commit means replay, not data loss.
+
+### Tests
+1. Insert, update, then delete customer 50001: output was ACCEPTED (c), ACCEPTED (u), DELETED, TOMBSTONE skipped.
+2. Restart with the same consumer group: nothing reprocessed (continued from the committed offset).
+3. Simulated a crash by rewinding the group 4 offsets (`kafka-consumer-groups.sh --reset-offsets --shift-by -4`): the replayed insert, update and delete were all REJECTED as stale, and MongoDB was unchanged.
