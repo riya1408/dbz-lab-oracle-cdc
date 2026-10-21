@@ -1,4 +1,4 @@
-﻿from dotenv import load_dotenv
+from dotenv import load_dotenv
 import os
 import json
 from confluent_kafka import Consumer
@@ -7,12 +7,13 @@ from pymongo.errors import DuplicateKeyError
 
 load_dotenv()
 client = MongoClient(os.getenv("MONGO_URI"))
-collection = client["cdc_lab"]["customers"]
+collection = client[os.getenv("MONGO_DB", "cdc_lab")]["customers"]
 
 consumer = Consumer({
     'bootstrap.servers': '127.0.0.1:29092',
     'group.id': 'cdc-lab-consumer-v4',
-    'auto.offset.reset': 'latest',     # only used the very first time (no bookmark yet)
+    # Only used the very first time (no saved bookmark yet). 'earliest' = read the snapshot too.
+    'auto.offset.reset': os.getenv("OFFSET_RESET", "earliest"),
     'enable.auto.commit': False,       # we save the bookmark ourselves, AFTER writing
 })
 

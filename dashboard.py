@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import pandas as pd
 import streamlit as st
@@ -16,7 +16,7 @@ st.set_page_config(page_title="Live CDC Dashboard", layout="wide")
 @st.cache_resource
 def get_collection():
     client = MongoClient(os.environ["MONGO_URI"])
-    return client["cdc_lab"][os.getenv("MONGO_COLLECTION", "customers")]
+    return client[os.getenv("MONGO_DB", "cdc_lab")][os.getenv("MONGO_COLLECTION", "customers")]
 
 
 @st.cache_data(ttl=5)                  # re-read MongoDB at most every 5 seconds

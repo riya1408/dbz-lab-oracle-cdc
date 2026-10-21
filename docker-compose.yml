@@ -1,0 +1,67 @@
+# One-command lab: Oracle -> Debezium (Kafka Connect) -> Kafka
+# Start:  docker compose up -d        Stop: docker compose stop
+# Wipe everything (fresh start): docker compose down -v
+name: cdc-lab
+
+services:
+  oracle-free:
+    image: container-registry.oracle.com/database/free:latest
+    environment:
+      ORACLE_PWD: ${ORACLE_PWD}          # SYS/SYSTEM password
+      DBZ_PASSWORD: ${DBZ_PASSWORD}      # used by the setup script for c##dbzuser
+      BANK_PASSWORD: ${BANK_PASSWORD}    # used by the setup script for the bank schema
+    ports:
+      - "1521:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata               # database survives restarts
+      - ./oracle/startup:/opt/oracle/scripts/startup:ro   # runs on every start (skips if already set up)
+    healthcheck:
+      test: ["CMD", "/opt/oracle/checkDBStatus.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 15m
+
+  kafka:
+    image: quay.io/debezium/kafka:3.6
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      NODE_ID: "1"
+      NODE_ROLE: combined
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://0.0.0.0:29092,CONTROLLER://kafka:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    ports:
+      - "29092:29092"     # for Python on the laptop (127.0.0.1:29092)
+    volumes:
+      - kafka-data:/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 15s
+      retries: 12
+      start_period: 20s
+
+  connect:
+    image: quay.io/debezium/connect:3.6
+    depends_on:
+      kafka:
+        condition: service_healthy
+      oracle-free:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: "1"
+      CONFIG_STORAGE_TOPIC: my_connect_configs
+      OFFSET_STORAGE_TOPIC: my_connect_offsets
+      STATUS_STORAGE_TOPIC: my_connect_statuses
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./ojdbc11.jar:/kafka/libs/ojdbc11.jar:ro      # Oracle JDBC driver (download separately)
+
+volumes:
+  oracle-data:
+  kafka-data:
