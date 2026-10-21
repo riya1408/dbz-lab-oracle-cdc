@@ -146,3 +146,15 @@ Note: Oracle->Kafka varied between runs (about 2s to 4s) with no Debezium change
 1. Insert, update, then delete customer 50001: output was ACCEPTED (c), ACCEPTED (u), DELETED, TOMBSTONE skipped.
 2. Restart with the same consumer group: nothing reprocessed (continued from the committed offset).
 3. Simulated a crash by rewinding the group 4 offsets (`kafka-consumer-groups.sh --reset-offsets --shift-by -4`): the replayed insert, update and delete were all REJECTED as stale, and MongoDB was unchanged.
+
+## Live dashboard
+`dashboard.py` is a Streamlit app that reads the MongoDB `customers` collection and refreshes every 5 seconds:
+- Active vs soft-deleted customers, average income, latest SCN applied
+- Customers by city and segment, average income by segment
+- The latest changes from the pipeline, ordered by SCN and txSeq
+
+Run: `python -m streamlit run dashboard.py` (reads `MONGO_URI` from `.env`).
+
+**Live test:** inserted customer 70001 (Hyderabad) and moved customer 60100 from Chennai to Delhi in Oracle. Within seconds the dashboard showed active customers 193 -> 194, a new Hyderabad bar, Delhi +1 / Chennai -1, and the update at the top of the latest-changes table.
+
+Next: containerise and deploy to Cloud Run with Terraform and GitHub Actions.
