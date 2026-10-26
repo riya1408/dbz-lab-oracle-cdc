@@ -10,7 +10,7 @@
     "database.dbname": "FREE",
     "database.pdb.name": "FREEPDB1",
     "topic.prefix": "bankdb3",
-    "table.include.list": "BANK.CUSTOMER",
+    "table.include.list": "BANK.CUSTOMER,BANK.ACCOUNTS,BANK.TRANSACTIONS",
     "decimal.handling.mode": "string",
     "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
     "schema.history.internal.kafka.topic": "schema-history.bankdb3",
