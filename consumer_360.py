@@ -6,7 +6,7 @@ Reads three CDC topics (CUSTOMER, ACCOUNTS, TRANSACTIONS) and maintains, in Mong
                    profile fields                       (guarded by _last_scn/_last_txseq)
                    accounts.<account_id>.{...}          (each guarded by its own _scn/_txseq)
                    net_position, recent_transactions,   (DERIVED - recomputed, never incremented)
-                   spend_30d, txn_count_30d
+                   spend_30d, txn_count_30d, alerts
   account_index  account_id -> customer_id  (transactions only know their account)
   transactions   one document per transaction, 90-day TTL (the "hot window")
   pending_txns   transactions whose account owner isn't known yet (the waiting room)
@@ -164,8 +164,33 @@ def refresh_net_position(db, cids):
             "in": "$$this.v.balance"}}}}}])
 
 
+FRAUD_WINDOW = dt.timedelta(minutes=10)
+FRAUD_MIN_TXNS, FRAUD_MIN_CITIES = 5, 3
+
+
+def card_alerts(card_txns):
+    """Rule: 5+ card payments across 3+ different cities within any 10-minute window."""
+    txns = sorted(card_txns, key=lambda t: t["ts"])
+    best, start = None, 0
+    for end in range(len(txns)):
+        while txns[end]["ts"] - txns[start]["ts"] > FRAUD_WINDOW:
+            start += 1
+        window = txns[start:end + 1]
+        cities = {t["city"] for t in window}
+        if len(window) >= FRAUD_MIN_TXNS and len(cities) >= FRAUD_MIN_CITIES:
+            if best is None or len(window) > len(best):
+                best = window
+    if not best:
+        return []
+    cities = sorted({t["city"] for t in best})
+    return [{"type": "UNUSUAL_CARD_ACTIVITY",
+             "detail": f"{len(best)} card payments in {len(cities)} cities within 10 minutes",
+             "cities": cities, "total": round(sum(t["amount"] for t in best), 2),
+             "detected_at": best[-1]["ts"]}]
+
+
 def refresh_activity(db, cids):
-    """recent_transactions (last 10), spend_30d per category, txn_count_30d."""
+    """recent_transactions (last 10), spend_30d per category, txn_count_30d, alerts."""
     if not cids:
         return
     cids = list(cids)
@@ -190,9 +215,16 @@ def refresh_activity(db, cids):
         if r["_id"]["dir"] == "DR":
             spend.setdefault(c, {})[r["_id"]["cat"]] = round(r["total"], 2)
 
+    card = {}
+    day_ago = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
+    for t in db.transactions.find({**live, "channel": "CARD", "direction": "DR", "ts": {"$gte": day_ago}},
+                                  {"customer_id": 1, "ts": 1, "city": 1, "amount": 1}):
+        card.setdefault(t["customer_id"], []).append(t)
+
     ops = [UpdateOne({"_id": c}, {"$set": {"recent_transactions": recent.get(c, []),
                                            "spend_30d": spend.get(c, {}),
-                                           "txn_count_30d": counts.get(c, 0)}}, upsert=True)
+                                           "txn_count_30d": counts.get(c, 0),
+                                           "alerts": card_alerts(card.get(c, []))}}, upsert=True)
            for c in cids]
     write(db.customer_360, ops)
 
