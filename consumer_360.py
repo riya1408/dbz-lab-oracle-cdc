@@ -19,6 +19,8 @@ Design rules
 - Parked transactions live in MongoDB, not in memory: Kafka offsets are committed after
   each batch, so anything held only in memory would be lost on a crash.
 - Batched, unordered bulk writes; Kafka offsets committed only after the batch is written.
+- Time-window fields (30-day spend, 24-hour alerts) also get a heartbeat refresh on idle,
+  because they go stale with the clock, not just with new events.
 """
 import datetime as dt
 import json
@@ -224,9 +226,30 @@ def refresh_activity(db, cids):
     ops = [UpdateOne({"_id": c}, {"$set": {"recent_transactions": recent.get(c, []),
                                            "spend_30d": spend.get(c, {}),
                                            "txn_count_30d": counts.get(c, 0),
-                                           "alerts": card_alerts(card.get(c, []))}}, upsert=True)
+                                           "alerts": card_alerts(card.get(c, [])),
+                                           "activity_refreshed_at": dt.datetime.now(dt.timezone.utc)}},
+                           upsert=True)
            for c in cids]
     write(db.customer_360, ops)
+
+
+# ---------- time-window heartbeat ----------
+
+SWEEP_EVERY_SECONDS = 60
+SWEEP_BATCH = 200
+
+
+def sweep_stale(db):
+    """Time-window fields (30-day spend, 24-hour alerts) change as time passes, even with no
+    new events. On idle, re-compute them for customers that have alerts or haven't been
+    refreshed for an hour - a small batch each time, so the free cluster isn't overloaded."""
+    hour_ago = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)
+    stale = [d["_id"] for d in db.customer_360.find(
+        {"$or": [{"alerts.0": {"$exists": True}},
+                 {"activity_refreshed_at": {"$lt": hour_ago}},
+                 {"activity_refreshed_at": {"$exists": False}}]}, {"_id": 1}).limit(SWEEP_BATCH)]
+    refresh_activity(db, stale)
+    return len(stale)
 
 
 # ---------- one batch ----------
@@ -302,7 +325,7 @@ def main():
     })
     consumer.subscribe([TOPIC_CUSTOMER, TOPIC_ACCOUNTS, TOPIC_TXNS])
     stats = {"events": 0, "tombstones": 0, "collapsed": 0, "applied": 0, "stale": 0, "parked_now": 0}
-    batch, started = [], time.time()
+    batch, started, last_sweep = [], time.time(), 0.0
     print("Customer 360 consumer running. Ctrl+C to stop.")
 
     def flush():
@@ -320,6 +343,11 @@ def main():
             msg = consumer.poll(1.0)
             if msg is None:
                 flush()
+                if time.time() - last_sweep > SWEEP_EVERY_SECONDS:
+                    n = sweep_stale(db)
+                    last_sweep = time.time()
+                    if n:
+                        print(f"heartbeat: refreshed time-window fields for {n} customers")
                 continue
             if msg.error():
                 print("Kafka error:", msg.error())
